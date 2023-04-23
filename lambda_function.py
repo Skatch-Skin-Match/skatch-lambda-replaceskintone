@@ -35,8 +35,14 @@ def lambda_handler(event, context):
 
     else :
         url = 'https://d30ukgyabounne.cloudfront.net/hmgoepprod.jpg'
-        # userAvgHSV =  [0,0,0]
+        
+        # 'user.jpg'
         userAvgHSV =  [9.994970190385274, 106.37392379185503, 159.3702324879771]
+        # 'fair'
+        #userAvgHSV =  [20, 45.9, 239.7]
+        # 'black'
+        #userAvgHSV =  [20, 137.7, 112.2]
+        
 
 
  
@@ -46,17 +52,25 @@ def lambda_handler(event, context):
 
     response = requests.get(url)
     img_array = np.asarray(bytearray(response.content), dtype=np.uint8)
+
     modelImg = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    # modelImg= cv2.imread('model.jpg')
+
     print("5555555555555555", now.strftime("%d/%m/%Y %H:%M:%S.%f")[:-3])
 
 
 
-    # modelImg= cv2.imread('model.jpg')
-
     # Convert BGR to HSV
     modelHSV = cv2.cvtColor(modelImg, cv2.COLOR_BGR2HSV)
 
+
+
+
+
+    # =-=-=-= UNOPTIMIZED MASKING BEGINS =-=-=-=
+
     # Define the lower and upper bounds of the skin tone in the HSV color space
+    # (this is a blanket, unoptimized range. will be used to determine optimized range)
     lower_skin = np.array([0, 20, 70])
     upper_skin = np.array([20, 255, 255])
 
@@ -77,10 +91,42 @@ def lambda_handler(event, context):
 )
 
     modelAvgHSV = avgHSVCalc(modelSkinHSV)
-    print(f"Model Skin Avg HSV: {modelAvgHSV}")
+    
+    print(f"Model Skin Avg HSV (UNOPTIMIZED): {modelAvgHSV}")
     print("77777777777777777", now.strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
 )
 
+    # =-=-=-= OPTIMIZED MASKING BEGINS =-=-=-=
+
+    # Now that we have the HSV of the unoptimized model mask, we can optimize the mask.
+    # If in LIGHT skin range
+    if modelAvgHSV[2] >= 181:
+        lower_skin = np.array([6, 20, 90])
+        upper_skin = np.array([16, 255, 255])
+        print ("LIGHT skin detected")
+
+    # If in DARK skin range
+    elif modelAvgHSV[2] < 181:
+        lower_skin = np.array([0, 20, 45])
+        upper_skin = np.array([14, 255, 255])
+        print ("DARK skin detected")
+
+
+    # Recalculating now that we have optimized HSV ranges.
+    modelMask = cv2.inRange(modelHSV, lower_skin, upper_skin)
+    modelSkin = cv2.bitwise_and(modelImg, modelImg, mask=modelMask)
+    modelSkinHSV = cv2.cvtColor(modelSkin, cv2.COLOR_BGR2HSV)
+
+    # userAvgHSV = avgHSVCalc(userSkinHSV)
+    # userAvgHSV =  [9.994970190385274, 106.37392379185503, 159.3702324879771]
+    # userAvgHSV = [11.150035017960825, 100.31511646296003, 181.08731897973476]
+    userAvgHSV = userAvgHSV
+
+    modelAvgHSV = avgHSVCalc(modelSkinHSV)
+    
+    print(f"Model Skin Avg HSV (OPTIMIZED): {modelAvgHSV}")
+    print("78787878787878", now.strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
+)
 
     # default adjustments
     reqAdjH = 0 # As of now, never shift hue.
@@ -164,29 +210,17 @@ def lambda_handler(event, context):
     }
 
 def avgHSVCalc(imgHSV):
-    imgHue = 0
-    imgSat = 0
-    imgVib = 0
+    # Split HSV channels into separate arrays.
+    imgHueChannel, imgSatChannel, imgVibChannel = cv2.split(imgHSV)
 
-    pixelCount = len(imgHSV[0]) * len(imgHSV) # col * row
+    # Getting average of each channels where pixel isn't black (0).
+    imgHueChannel_np = np.array(imgHueChannel)
+    imgSatChannel_np = np.array(imgSatChannel)
+    imgVibChannel_np = np.array(imgVibChannel)
 
-
-    for i in imgHSV: # i is a particular row
-        for n in i: # n is a partcular column
-            # if black, disregard pixel for averaging
-            if n[0] == 0 and n[1] == 0 and n[2] == 0 : 
-                pixelCount = pixelCount - 1
-
-            else :
-                imgHue = imgHue + n[0]
-                imgSat = imgSat + n[1]
-                imgVib = imgVib + n[2]
-            # print(f"{n[0]} {n[1]} {n[2]}")
-
-
-    avgImgHue = imgHue / pixelCount
-    avgImgSat = imgSat / pixelCount
-    avgImgVib = imgVib / pixelCount
+    avgImgHue = imgHueChannel_np.mean(where = imgHueChannel_np > 0)
+    avgImgSat = imgSatChannel_np.mean(where = imgSatChannel_np > 0)
+    avgImgVib = imgVibChannel_np.mean(where = imgVibChannel_np > 0)
 
 
     # HSV in CV2 is [179,255,255]. Conversions:
